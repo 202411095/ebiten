@@ -1,0 +1,218 @@
+package main
+
+import (
+	"image/color"
+	"log"
+	"math/rand"
+	"strconv"
+	"time"
+
+	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+)
+
+const (
+	screenWidth  = 800
+	screenHeight = 600
+)
+
+type Player struct {
+	x, y float64
+}
+
+type Obstacle struct {
+	x, y     float64
+	width    float64
+	height   float64
+	velocity float64
+	mass     float64
+	area     float64
+}
+
+type Item struct {
+	x, y   float64
+	width  float64
+	height float64
+	speed  float64
+}
+
+type Game struct {
+	player      Player
+	obstacles   []Obstacle
+	items       []Item
+	score       int
+	gameOver    bool
+	elapsedTime float64
+}
+
+func (g *Game) Init() {
+	g.player = Player{x: screenWidth / 2, y: screenHeight - 50}
+	g.score = 0
+	g.gameOver = false
+	g.elapsedTime = 0
+	rand.Seed(time.Now().UnixNano())
+
+	// Initialize obstacles and items
+	g.generateObstacles()
+	g.generateItems()
+}
+
+func (g *Game) generateObstacles() {
+	g.obstacles = []Obstacle{}
+	for i := 0; i < 1; i++ { // Reduced initial number of obstacles
+		g.obstacles = append(g.obstacles, g.newObstacle())
+	}
+}
+
+func (g *Game) generateItems() {
+	g.items = []Item{}
+	for i := 0; i < 3; i++ {
+		g.items = append(g.items, g.newItem())
+	}
+}
+
+func (g *Game) newObstacle() Obstacle {
+	types := []struct {
+		width, height float64
+	}{
+		{70, 20}, // Horizontal rectangle
+		{20, 70}, // Vertical rectangle
+		{30, 30},  // Square
+	}
+	t := types[rand.Intn(len(types))]
+	area := t.width * t.height
+	return Obstacle{
+		x:        rand.Float64() * (screenWidth - t.width),
+		y:        -t.height,
+		width:    t.width,
+		height:   t.height,
+		velocity: 0,          // Initial velocity is zero
+		mass:     area * 0.1, // Simplified mass calculation
+		area:     area,
+	}
+}
+
+func (g *Game) newItem() Item {
+	return Item{
+		x:      rand.Float64() * (screenWidth - 20),
+		y:      -20 - rand.Float64()*200, // Random vertical interval
+		width:  20,
+		height: 20,
+		speed:  5, // Constant speed
+	}
+}
+
+func (g *Game) Update() error {
+	if g.gameOver {
+		return nil
+	}
+
+	g.elapsedTime += 1.0
+
+	// Increase difficulty over time
+	if int(g.elapsedTime)%60 == 0 {
+		g.obstacles = append(g.obstacles, g.newObstacle())
+	}
+
+	// Handle player movement
+	if ebiten.IsKeyPressed(ebiten.KeyLeft) {
+		g.player.x -= 5
+		if g.player.x < 0 {
+			g.player.x = 0
+		}
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyRight) {
+		g.player.x += 5
+		if g.player.x > screenWidth-50 {
+			g.player.x = screenWidth - 50
+		}
+	}
+
+	// Constants for the physics simulation
+	gConstObstacles := 9.8 // 15 times faster gravitational constant
+	airDensity := 1.225
+	dragCoefficient := 1.0 // Assumed constant
+
+	// Update obstacles
+	for i := range g.obstacles {
+		o := &g.obstacles[i]
+		dragForce := 0.5 * dragCoefficient * airDensity * o.area * o.velocity * o.velocity
+		netForce := o.mass*gConstObstacles - dragForce
+		acceleration := netForce / o.mass
+		o.velocity += acceleration / 8.0 // Update velocity with time step of 1/60 seconds
+		o.y += o.velocity                 // Update position with time step of 1/60 seconds
+
+		if o.y > screenHeight {
+			g.obstacles[i] = g.newObstacle()
+		}
+	}
+
+	// Update items
+	for i := range g.items {
+		g.items[i].y += g.items[i].speed
+		if g.items[i].y > screenHeight {
+			g.items[i] = g.newItem()
+		}
+	}
+
+	// Check collisions
+	g.checkCollisions()
+
+	return nil
+}
+
+func (g *Game) Draw(screen *ebiten.Image) {
+	if g.gameOver {
+		ebitenutil.DebugPrint(screen, "Game Over! Score: "+strconv.Itoa(g.score))
+		return
+	}
+
+	// Draw player
+	ebitenutil.DrawRect(screen, g.player.x, g.player.y, 50, 50, color.White)
+
+	// Draw obstacles
+	for _, o := range g.obstacles {
+		ebitenutil.DrawRect(screen, o.x, o.y, o.width, o.height, color.RGBA{255, 0, 0, 255})
+	}
+
+	// Draw items
+	for _, item := range g.items {
+		ebitenutil.DrawRect(screen, item.x, item.y, item.width, item.height, color.White)
+	}
+
+	// Draw score
+	ebitenutil.DebugPrint(screen, "Score: "+strconv.Itoa(g.score))
+}
+
+func (g *Game) checkCollisions() {
+	for _, o := range g.obstacles {
+		if g.player.x < o.x+o.width && g.player.x+50 > o.x &&
+			g.player.y < o.y+o.height && g.player.y+50 > o.y {
+			g.gameOver = true
+		}
+	}
+
+	for i := range g.items {
+		if g.player.x < g.items[i].x+g.items[i].width && g.player.x+50 > g.items[i].x &&
+			g.player.y < g.items[i].y+g.items[i].height && g.player.y+50 > g.items[i].y {
+			g.score++
+			g.items[i] = g.newItem()
+		}
+	}
+}
+
+func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
+	return screenWidth, screenHeight
+}
+
+func main() {
+	game := &Game{}
+	game.Init()
+
+	ebiten.SetWindowSize(screenWidth, screenHeight)
+	ebiten.SetWindowTitle("Falling Obstacles Game")
+
+	if err := ebiten.RunGame(game); err != nil {
+		log.Fatal(err)
+	}
+}
